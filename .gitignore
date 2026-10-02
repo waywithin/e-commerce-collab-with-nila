@@ -1,0 +1,28 @@
+# Local environment settings and credentials
+.env
+.env.*
+!.env.example
+
+# Helper containing a hard-coded password; never commit or deploy it
+/generate_password.php
+
+# User-uploaded files are runtime data, not source assets
+/uploads/products/*
+/uploads/providers/*
+
+# Local database exports, backups, and application logs
+/*.sql.gz
+/*.dump
+/*.bak
+*.log
+
+# Private key and certificate bundles
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
