@@ -38,7 +38,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $provId = filter_input(INPUT_POST, 'id', FILTER_VALIDATE_INT) ?: (int)($_POST['id'] ?? 0);
 
     // 3. Whitelist allowed state-changing actions
-    $allowedActions = ['approve', 'reject', 'suspend', 'toggle_featured'];
+    $allowedActions = ['approve', 'reject', 'suspend', 'feature', 'unfeature'];
     if (!in_array($action, $allowedActions, true)) {
         set_flash('danger', 'Invalid or unsupported action requested.');
         header("Location: " . BASE_URL . "/manager/providers.php");
@@ -71,6 +71,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $bizName = $targetProvider['business_name'];
     $userId = (int)$targetProvider['user_id'];
+    $isTargetApproved = ($targetProvider['approval_status'] === 'approved' && ($targetProvider['user_status'] ?? '') === 'active');
 
     // 6. Execute state change safely
     if ($action === 'approve') {
@@ -87,15 +88,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $db->prepare("UPDATE users SET status = 'suspended', updated_at = NOW() WHERE id = :uid")->execute(['uid' => $userId]);
         log_activity(current_user_id(), 'SUSPEND_PROVIDER', 'service_provider', $provId, 'Suspended Business Owner account: ' . $bizName);
         set_flash('danger', 'Business Owner "' . e($bizName) . '" has been suspended and storefront deactivated.');
-    } elseif ($action === 'toggle_featured') {
-        $newFeatured = $targetProvider['is_featured'] ? 0 : 1;
-        $db->prepare("UPDATE service_providers SET is_featured = :feat, updated_at = NOW() WHERE id = :id")->execute([
-            'feat' => $newFeatured,
-            'id'   => $provId
-        ]);
-        $statusLabel = $newFeatured ? 'featured' : 'unfeatured';
-        log_activity(current_user_id(), 'FEATURE_PROVIDER', 'service_provider', $provId, 'Toggled featured status (' . $statusLabel . ') for: ' . $bizName);
-        set_flash('success', 'Business Owner "' . e($bizName) . '" is now ' . $statusLabel . '.');
+    } elseif ($action === 'feature') {
+        // Strict Server-Side Approval Enforcement: Only approved & active profiles can be featured
+        if (!$isTargetApproved) {
+            set_flash('danger', 'Cannot feature Business Owner "' . e($bizName) . '". Only approved and active profiles are eligible for featured promotional placement.');
+        } else {
+            $db->prepare("UPDATE service_providers SET is_featured = 1, updated_at = NOW() WHERE id = :id")->execute(['id' => $provId]);
+            log_activity(current_user_id(), 'FEATURE_PROVIDER', 'service_provider', $provId, 'Enabled featured promotional placement for: ' . $bizName);
+            set_flash('success', 'Business Owner "' . e($bizName) . '" is now marked as Featured for promotional placement.');
+        }
+    } elseif ($action === 'unfeature') {
+        $db->prepare("UPDATE service_providers SET is_featured = 0, updated_at = NOW() WHERE id = :id")->execute(['id' => $provId]);
+        log_activity(current_user_id(), 'UNFEATURE_PROVIDER', 'service_provider', $provId, 'Removed featured promotional placement for: ' . $bizName);
+        set_flash('success', 'Featured promotional placement removed for "' . e($bizName) . '".');
     }
 
     // Preserve search/filter query params on redirect
@@ -123,7 +128,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // --------------------------------------------------------------------
 $search = mb_substr(sanitize_string($_GET['search'] ?? ''), 0, 100);
 $rawStatus = sanitize_string($_GET['status'] ?? 'all');
-$allowedStatuses = ['all', 'pending', 'overdue', 'approved', 'rejected', 'suspended', 'featured'];
+$allowedStatuses = ['all', 'pending', 'overdue', 'approved', 'rejected', 'suspended', 'featured', 'not_featured'];
 $statusFilter = in_array($rawStatus, $allowedStatuses, true) ? $rawStatus : 'all';
 $categoryFilter = max(0, (int)($_GET['category'] ?? 0));
 
@@ -140,10 +145,19 @@ $summaryCounts = $db->query("
         SUM(CASE WHEN sp.approval_status = 'pending' AND sp.created_at <= NOW() - INTERVAL 24 HOUR THEN 1 ELSE 0 END) AS overdue_count,
         SUM(CASE WHEN sp.approval_status = 'approved' AND u.status = 'active' THEN 1 ELSE 0 END) AS approved_count,
         SUM(CASE WHEN sp.approval_status = 'rejected' OR u.status = 'suspended' THEN 1 ELSE 0 END) AS rejected_count,
-        SUM(CASE WHEN sp.is_featured = 1 THEN 1 ELSE 0 END) AS featured_count
+        SUM(CASE WHEN sp.is_featured = 1 AND sp.approval_status = 'approved' AND u.status = 'active' THEN 1 ELSE 0 END) AS featured_count,
+        SUM(CASE WHEN sp.is_featured = 0 AND sp.approval_status = 'approved' AND u.status = 'active' THEN 1 ELSE 0 END) AS unfeatured_approved_count
     FROM service_providers sp
     JOIN users u ON sp.user_id = u.id
-")->fetch() ?: ['total' => 0, 'pending_count' => 0, 'overdue_count' => 0, 'approved_count' => 0, 'rejected_count' => 0, 'featured_count' => 0];
+")->fetch() ?: [
+    'total' => 0,
+    'pending_count' => 0,
+    'overdue_count' => 0,
+    'approved_count' => 0,
+    'rejected_count' => 0,
+    'featured_count' => 0,
+    'unfeatured_approved_count' => 0
+];
 
 // --------------------------------------------------------------------
 // 4. PREPARED SEARCH & FILTER QUERY WITH OVERDUE ESCALATION SORTING
@@ -172,7 +186,9 @@ if ($statusFilter === 'overdue') {
 } elseif ($statusFilter === 'suspended') {
     $whereClauses[] = "u.status = 'suspended'";
 } elseif ($statusFilter === 'featured') {
-    $whereClauses[] = "sp.is_featured = 1";
+    $whereClauses[] = "sp.is_featured = 1 AND sp.approval_status = 'approved' AND u.status = 'active'";
+} elseif ($statusFilter === 'not_featured') {
+    $whereClauses[] = "sp.is_featured = 0 AND sp.approval_status = 'approved' AND u.status = 'active'";
 }
 
 if ($categoryFilter > 0) {
@@ -201,6 +217,7 @@ $stmt = $db->prepare("
     ORDER BY
         (CASE WHEN sp.approval_status = 'pending' AND sp.created_at <= NOW() - INTERVAL 24 HOUR THEN 1 ELSE 0 END) DESC,
         (CASE WHEN sp.approval_status = 'pending' THEN 1 ELSE 0 END) DESC,
+        (CASE WHEN sp.is_featured = 1 AND sp.approval_status = 'approved' THEN 1 ELSE 0 END) DESC,
         sp.id DESC
 ");
 $stmt->execute($queryParams);
@@ -272,8 +289,13 @@ include __DIR__ . '/includes/header.php';
     </a>
     <a href="<?php echo BASE_URL; ?>/manager/providers.php?status=featured" class="summary-chip <?php echo ($statusFilter === 'featured') ? 'active' : ''; ?>">
         <i class="fa-solid fa-star" style="color: #b45309;"></i>
-        <span>Featured</span>
+        <span>Featured (Approved)</span>
         <span class="summary-chip-count" style="color: #b45309;"><?php echo (int)($summaryCounts['featured_count'] ?? 0); ?></span>
+    </a>
+    <a href="<?php echo BASE_URL; ?>/manager/providers.php?status=not_featured" class="summary-chip <?php echo ($statusFilter === 'not_featured') ? 'active' : ''; ?>">
+        <i class="fa-regular fa-star" style="color: #64748b;"></i>
+        <span>Not Featured (Approved)</span>
+        <span class="summary-chip-count" style="color: #64748b;"><?php echo (int)($summaryCounts['unfeatured_approved_count'] ?? 0); ?></span>
     </a>
 </div>
 
@@ -293,7 +315,8 @@ include __DIR__ . '/includes/header.php';
                 <option value="approved" <?php echo ($statusFilter === 'approved') ? 'selected' : ''; ?>>Approved &amp; Active</option>
                 <option value="rejected" <?php echo ($statusFilter === 'rejected') ? 'selected' : ''; ?>>Rejected</option>
                 <option value="suspended" <?php echo ($statusFilter === 'suspended') ? 'selected' : ''; ?>>Suspended Accounts</option>
-                <option value="featured" <?php echo ($statusFilter === 'featured') ? 'selected' : ''; ?>>Featured Only</option>
+                <option value="featured" <?php echo ($statusFilter === 'featured') ? 'selected' : ''; ?>>Featured (Approved Only)</option>
+                <option value="not_featured" <?php echo ($statusFilter === 'not_featured') ? 'selected' : ''; ?>>Not Featured (Approved Only)</option>
             </select>
         </div>
 
@@ -430,14 +453,42 @@ include __DIR__ . '/includes/header.php';
                                 <span style="font-size: 12px; color: #64748b;">items</span>
                             </td>
                             <td>
-                                <form method="POST" action="<?php echo BASE_URL; ?>/manager/providers.php" style="display: inline;">
-                                    <?php echo csrf_field(); ?>
-                                    <input type="hidden" name="action" value="toggle_featured">
-                                    <input type="hidden" name="id" value="<?php echo (int)$p['id']; ?>">
-                                    <button type="submit" class="badge" style="background: <?php echo $p['is_featured'] ? '#fef3c7; color: #b45309;' : '#f1f5f9; color: #94a3b8;'; ?> border: none; cursor: pointer; text-decoration: none;" title="Click to toggle featured placement">
-                                        <i class="fa-solid fa-star"></i> <?php echo $p['is_featured'] ? 'Featured' : 'No'; ?>
-                                    </button>
-                                </form>
+                                <?php if ($isApproved): ?>
+                                    <?php if ($p['is_featured']): ?>
+                                        <form method="POST" action="<?php echo BASE_URL; ?>/manager/providers.php" style="display: inline;" onsubmit="return confirm('Remove Featured placement for this Business Owner?');">
+                                            <?php echo csrf_field(); ?>
+                                            <input type="hidden" name="action" value="unfeature">
+                                            <input type="hidden" name="id" value="<?php echo (int)$p['id']; ?>">
+                                            <button type="submit" class="badge" style="background: #fef3c7; color: #b45309; border: 1px solid #fde68a; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; font-weight: 700; padding: 4px 8px;" title="Promoted on marketplace — Click to remove featured status">
+                                                <i class="fa-solid fa-star"></i> Featured
+                                            </button>
+                                        </form>
+                                    <?php else: ?>
+                                        <form method="POST" action="<?php echo BASE_URL; ?>/manager/providers.php" style="display: inline;" onsubmit="return confirm('Feature this Business Owner? This highlights them in promotional placements on the marketplace.');">
+                                            <?php echo csrf_field(); ?>
+                                            <input type="hidden" name="action" value="feature">
+                                            <input type="hidden" name="id" value="<?php echo (int)$p['id']; ?>">
+                                            <button type="submit" class="badge" style="background: #f1f5f9; color: #64748b; border: 1px solid #e2e8f0; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px;" title="Click to enable featured promotional placement">
+                                                <i class="fa-regular fa-star"></i> Not Featured
+                                            </button>
+                                        </form>
+                                    <?php endif; ?>
+                                <?php else: ?>
+                                    <?php if ($p['is_featured']): ?>
+                                        <form method="POST" action="<?php echo BASE_URL; ?>/manager/providers.php" style="display: inline;" onsubmit="return confirm('Remove Featured placement mismatch for this unapproved Business Owner?');">
+                                            <?php echo csrf_field(); ?>
+                                            <input type="hidden" name="action" value="unfeature">
+                                            <input type="hidden" name="id" value="<?php echo (int)$p['id']; ?>">
+                                            <button type="submit" class="badge" style="background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px;" title="Mismatch: Flagged as featured but profile is unapproved — Click to clear">
+                                                <i class="fa-solid fa-triangle-exclamation"></i> Flagged (Unapproved)
+                                            </button>
+                                        </form>
+                                    <?php else: ?>
+                                        <span class="badge" style="background: #f8fafc; color: #94a3b8; border: 1px dashed #cbd5e1; display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px;" title="Must be approved before enabling featured placement">
+                                            <i class="fa-regular fa-star"></i> Ineligible
+                                        </span>
+                                    <?php endif; ?>
+                                <?php endif; ?>
                             </td>
                             <td>
                                 <?php if ($isSuspended): ?>
@@ -591,6 +642,11 @@ include __DIR__ . '/includes/header.php';
                     <div id="modalCreatedAt" class="detail-value"></div>
                 </div>
 
+                <div class="detail-item">
+                    <div class="detail-label">Featured Promotional Placement</div>
+                    <div id="modalFeaturedPlacement" class="detail-value"></div>
+                </div>
+
                 <div class="detail-item" style="grid-column: span 2;">
                     <div class="detail-label">Review Status &amp; Escalation SLA</div>
                     <div id="modalReviewEscalation" class="detail-value"></div>
@@ -606,6 +662,25 @@ include __DIR__ . '/includes/header.php';
 
         <div class="modal-footer">
             <button type="button" class="btn btn-outline btn-sm" onclick="closeProviderModal()">Close</button>
+
+            <!-- Modal Featured Forms (POST) -->
+            <form id="modalFeatureForm" method="POST" action="<?php echo BASE_URL; ?>/manager/providers.php" style="display: inline;" onsubmit="return confirm('Feature this Business Owner? This highlights them in promotional placements on the marketplace.');">
+                <?php echo csrf_field(); ?>
+                <input type="hidden" name="action" value="feature">
+                <input type="hidden" id="modalFeatureId" name="id" value="">
+                <button type="submit" class="btn btn-outline btn-sm" style="color: #b45309; border-color: #fde68a;">
+                    <i class="fa-solid fa-star"></i> Feature Profile
+                </button>
+            </form>
+
+            <form id="modalUnfeatureForm" method="POST" action="<?php echo BASE_URL; ?>/manager/providers.php" style="display: inline;" onsubmit="return confirm('Remove Featured placement for this Business Owner?');">
+                <?php echo csrf_field(); ?>
+                <input type="hidden" name="action" value="unfeature">
+                <input type="hidden" id="modalUnfeatureId" name="id" value="">
+                <button type="submit" class="btn btn-outline btn-sm" style="color: #64748b; border-color: #cbd5e1;">
+                    <i class="fa-regular fa-star"></i> Remove Featured
+                </button>
+            </form>
 
             <!-- Modal Action Forms (POST) -->
             <form id="modalApproveForm" method="POST" action="<?php echo BASE_URL; ?>/manager/providers.php" style="display: inline;">
@@ -672,6 +747,32 @@ function openProviderModal(data) {
         escalationEl.innerHTML = '<span style="color: #991b1b; font-weight: 600;"><i class="fa-solid fa-circle-xmark"></i> Application Rejected</span>';
     }
 
+    // Featured Placement Indicator & Forms
+    const featEl = document.getElementById('modalFeaturedPlacement');
+    const isApproved = (data.approval_status === 'approved' && data.user_status === 'active');
+    const isFeatured = parseInt(data.is_featured, 10) === 1;
+
+    document.getElementById('modalFeatureId').value = data.id;
+    document.getElementById('modalUnfeatureId').value = data.id;
+
+    if (isFeatured && isApproved) {
+        featEl.innerHTML = '<span class="badge" style="background: #fef3c7; color: #b45309; font-weight: 700;"><i class="fa-solid fa-star"></i> Featured</span> <span style="font-size: 11.5px; color: #64748b; margin-left: 4px;">(Promotional visibility active)</span>';
+        document.getElementById('modalFeatureForm').style.display = 'none';
+        document.getElementById('modalUnfeatureForm').style.display = 'inline';
+    } else if (isFeatured && !isApproved) {
+        featEl.innerHTML = '<span class="badge" style="background: #fee2e2; color: #991b1b;"><i class="fa-solid fa-triangle-exclamation"></i> Flagged (Unapproved)</span>';
+        document.getElementById('modalFeatureForm').style.display = 'none';
+        document.getElementById('modalUnfeatureForm').style.display = 'inline';
+    } else if (isApproved) {
+        featEl.innerHTML = '<span class="badge" style="background: #f1f5f9; color: #64748b;"><i class="fa-regular fa-star"></i> Standard / Not Featured</span>';
+        document.getElementById('modalFeatureForm').style.display = 'inline';
+        document.getElementById('modalUnfeatureForm').style.display = 'none';
+    } else {
+        featEl.innerHTML = '<span class="badge" style="background: #f8fafc; color: #94a3b8; border: 1px dashed #cbd5e1;"><i class="fa-regular fa-star"></i> Ineligible (Approval Required)</span>';
+        document.getElementById('modalFeatureForm').style.display = 'none';
+        document.getElementById('modalUnfeatureForm').style.display = 'none';
+    }
+
     // Public storefront link
     document.getElementById('modalProfileLink').href = '<?php echo BASE_URL; ?>/provider-profile.php?slug=' + encodeURIComponent(data.slug);
 
@@ -692,7 +793,6 @@ function openProviderModal(data) {
     document.getElementById('modalSuspendId').value = data.id;
 
     // Toggle button visibility based on status
-    const isApproved = (data.approval_status === 'approved' && data.user_status === 'active');
     const isPending = (data.approval_status === 'pending');
 
     document.getElementById('modalApproveForm').style.display = isApproved ? 'none' : 'inline';
