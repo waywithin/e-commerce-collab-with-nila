@@ -108,21 +108,22 @@ $categoryFilter = (int)($_GET['category'] ?? 0);
 $categoriesList = $db->query("SELECT id, name FROM categories WHERE status = 'active' ORDER BY name ASC")->fetchAll();
 
 // --------------------------------------------------------------------
-// 3. OVERALL SUMMARY METRICS
+// 3. OVERALL SUMMARY METRICS (Includes 24-Hour Review Overdue Count)
 // --------------------------------------------------------------------
 $summaryCounts = $db->query("
     SELECT
         COUNT(*) AS total,
         SUM(CASE WHEN sp.approval_status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+        SUM(CASE WHEN sp.approval_status = 'pending' AND sp.created_at <= NOW() - INTERVAL 24 HOUR THEN 1 ELSE 0 END) AS overdue_count,
         SUM(CASE WHEN sp.approval_status = 'approved' AND u.status = 'active' THEN 1 ELSE 0 END) AS approved_count,
         SUM(CASE WHEN sp.approval_status = 'rejected' OR u.status = 'suspended' THEN 1 ELSE 0 END) AS rejected_count,
         SUM(CASE WHEN sp.is_featured = 1 THEN 1 ELSE 0 END) AS featured_count
     FROM service_providers sp
     JOIN users u ON sp.user_id = u.id
-")->fetch() ?: ['total' => 0, 'pending_count' => 0, 'approved_count' => 0, 'rejected_count' => 0, 'featured_count' => 0];
+")->fetch() ?: ['total' => 0, 'pending_count' => 0, 'overdue_count' => 0, 'approved_count' => 0, 'rejected_count' => 0, 'featured_count' => 0];
 
 // --------------------------------------------------------------------
-// 4. PREPARED SEARCH & FILTER QUERY
+// 4. PREPARED SEARCH & FILTER QUERY WITH OVERDUE ESCALATION SORTING
 // --------------------------------------------------------------------
 $whereClauses = [];
 $queryParams = [];
@@ -137,7 +138,9 @@ if (!empty($search)) {
     $queryParams['s5'] = $searchTerm;
 }
 
-if ($statusFilter === 'pending') {
+if ($statusFilter === 'overdue') {
+    $whereClauses[] = "sp.approval_status = 'pending' AND sp.created_at <= NOW() - INTERVAL 24 HOUR";
+} elseif ($statusFilter === 'pending') {
     $whereClauses[] = "sp.approval_status = 'pending'";
 } elseif ($statusFilter === 'approved') {
     $whereClauses[] = "sp.approval_status = 'approved' AND u.status = 'active'";
@@ -163,19 +166,25 @@ $stmt = $db->prepare("
            u.phone AS owner_phone,
            u.status AS user_status,
            c.name AS category_name,
-           COUNT(p.id) AS total_products
+           COUNT(p.id) AS total_products,
+           (CASE WHEN sp.approval_status = 'pending' AND sp.created_at <= NOW() - INTERVAL 24 HOUR THEN 1 ELSE 0 END) AS is_overdue,
+           TIMESTAMPDIFF(HOUR, sp.created_at, NOW()) AS hours_since_created
     FROM service_providers sp
     JOIN users u ON sp.user_id = u.id
     LEFT JOIN categories c ON sp.category_id = c.id
     LEFT JOIN products p ON sp.id = p.provider_id
     $whereSql
     GROUP BY sp.id
-    ORDER BY sp.id DESC
+    ORDER BY
+        (CASE WHEN sp.approval_status = 'pending' AND sp.created_at <= NOW() - INTERVAL 24 HOUR THEN 1 ELSE 0 END) DESC,
+        (CASE WHEN sp.approval_status = 'pending' THEN 1 ELSE 0 END) DESC,
+        sp.id DESC
 ");
 $stmt->execute($queryParams);
 $providers = $stmt->fetchAll();
 
 $isFiltered = (!empty($search) || ($statusFilter !== 'all') || ($categoryFilter > 0));
+$totalOverdue = (int)($summaryCounts['overdue_count'] ?? 0);
 
 include __DIR__ . '/includes/header.php';
 ?>
@@ -183,7 +192,7 @@ include __DIR__ . '/includes/header.php';
 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 12px;">
     <div>
         <h1 style="font-size: 26px; color: var(--secondary); margin-bottom: 4px;">Manage Business Owners</h1>
-        <p style="font-size: 14px; color: #64748b;">Review onboarding applications, search directory, inspect business profiles, and manage active status.</p>
+        <p style="font-size: 14px; color: #64748b;">Review onboarding applications, prioritize 24-hour overdue reviews, inspect business profiles, and manage active status.</p>
     </div>
     <div>
         <a href="<?php echo BASE_URL; ?>/manager/categories.php" class="btn btn-outline btn-sm">
@@ -191,6 +200,26 @@ include __DIR__ . '/includes/header.php';
         </a>
     </div>
 </div>
+
+<!-- 24-Hour Review Overdue Alert Banner -->
+<?php if ($totalOverdue > 0): ?>
+    <div style="background: #fef2f2; border: 1px solid #fecaca; border-left: 4px solid #dc2626; border-radius: var(--radius-md, 6px); padding: 14px 18px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+        <div style="display: flex; align-items: center; gap: 12px;">
+            <div style="width: 36px; height: 36px; border-radius: 50%; background: #fee2e2; color: #dc2626; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0;">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+            </div>
+            <div>
+                <strong style="color: #991b1b; font-size: 14px;">Urgent: <?php echo $totalOverdue; ?> <?php echo $totalOverdue === 1 ? 'application has' : 'applications have'; ?> exceeded the 24-hour review SLA</strong>
+                <div style="font-size: 12.5px; color: #7f1d1d; margin-top: 2px;">
+                    These applications were submitted over 24 hours ago and require immediate manager review to maintain entrepreneur onboarding standards.
+                </div>
+            </div>
+        </div>
+        <a href="<?php echo BASE_URL; ?>/manager/providers.php?status=overdue" class="btn btn-sm" style="background: #dc2626; color: #ffffff; border: none; font-weight: 700;">
+            <i class="fa-solid fa-bolt"></i> View Overdue (<?php echo $totalOverdue; ?>)
+        </a>
+    </div>
+<?php endif; ?>
 
 <!-- Summary Chips Navigation -->
 <div class="summary-chips-row">
@@ -202,6 +231,11 @@ include __DIR__ . '/includes/header.php';
         <i class="fa-solid fa-clock" style="color: #d97706;"></i>
         <span>Pending Review</span>
         <span class="summary-chip-count" style="color: #d97706;"><?php echo (int)($summaryCounts['pending_count'] ?? 0); ?></span>
+    </a>
+    <a href="<?php echo BASE_URL; ?>/manager/providers.php?status=overdue" class="summary-chip <?php echo ($statusFilter === 'overdue') ? 'active' : ''; ?>" style="<?php echo ($totalOverdue > 0) ? 'border-color: #fca5a5; color: #dc2626; background: #fff5f5;' : ''; ?>">
+        <i class="fa-solid fa-triangle-exclamation" style="color: #dc2626;"></i>
+        <span>Review Overdue</span>
+        <span class="summary-chip-count" style="<?php echo ($totalOverdue > 0) ? 'background: #dc2626; color: #ffffff;' : 'color: #dc2626;'; ?>"><?php echo $totalOverdue; ?></span>
     </a>
     <a href="<?php echo BASE_URL; ?>/manager/providers.php?status=approved" class="summary-chip <?php echo ($statusFilter === 'approved') ? 'active' : ''; ?>">
         <i class="fa-solid fa-circle-check" style="color: #059669;"></i>
@@ -231,7 +265,8 @@ include __DIR__ . '/includes/header.php';
         <div class="filter-select-group">
             <select name="status" class="filter-select">
                 <option value="all" <?php echo ($statusFilter === 'all') ? 'selected' : ''; ?>>All Statuses</option>
-                <option value="pending" <?php echo ($statusFilter === 'pending') ? 'selected' : ''; ?>>Pending Review</option>
+                <option value="pending" <?php echo ($statusFilter === 'pending') ? 'selected' : ''; ?>>Pending Review (All)</option>
+                <option value="overdue" <?php echo ($statusFilter === 'overdue') ? 'selected' : ''; ?>>Review Overdue (&gt;24h)</option>
                 <option value="approved" <?php echo ($statusFilter === 'approved') ? 'selected' : ''; ?>>Approved &amp; Active</option>
                 <option value="rejected" <?php echo ($statusFilter === 'rejected') ? 'selected' : ''; ?>>Rejected</option>
                 <option value="suspended" <?php echo ($statusFilter === 'suspended') ? 'selected' : ''; ?>>Suspended Accounts</option>
@@ -310,10 +345,12 @@ include __DIR__ . '/includes/header.php';
                 <tbody>
                     <?php foreach ($providers as $p):
                         $logoUrl = get_image_url($p['logo_image'], 'provider');
+                        $isOverdue = (!empty($p['is_overdue']) && $p['approval_status'] === 'pending');
                         $isPending = ($p['approval_status'] === 'pending');
                         $isApproved = ($p['approval_status'] === 'approved' && ($p['user_status'] ?? 'active') === 'active');
                         $isSuspended = (($p['user_status'] ?? '') === 'suspended');
                         $isRejected = ($p['approval_status'] === 'rejected');
+                        $hoursPending = (int)($p['hours_since_created'] ?? 0);
 
                         $providerModalData = [
                             'id' => (int)$p['id'],
@@ -330,6 +367,8 @@ include __DIR__ . '/includes/header.php';
                             'description' => $p['description'] ?? '',
                             'tagline' => $p['tagline'] ?? '',
                             'approval_status' => $p['approval_status'],
+                            'is_overdue' => $isOverdue ? 1 : 0,
+                            'hours_pending' => $hoursPending,
                             'user_status' => $p['user_status'] ?? 'active',
                             'is_featured' => (int)$p['is_featured'],
                             'total_products' => (int)$p['total_products'],
@@ -338,7 +377,7 @@ include __DIR__ . '/includes/header.php';
                             'logo_url' => $logoUrl
                         ];
                     ?>
-                        <tr>
+                        <tr <?php echo $isOverdue ? 'style="background: #fffcf8; border-left: 3px solid #dc2626;"' : ''; ?>>
                             <td>
                                 <img src="<?php echo e($logoUrl); ?>" alt="<?php echo e($p['business_name']); ?>" style="width: 44px; height: 44px; border-radius: 50%; object-fit: cover; border: 1px solid #e2e8f0;">
                             </td>
@@ -382,10 +421,24 @@ include __DIR__ . '/includes/header.php';
                                     <span class="badge" style="background: #f1f5f9; color: #475569;">
                                         <i class="fa-solid fa-user-slash"></i> Suspended
                                     </span>
+                                <?php elseif ($isOverdue): ?>
+                                    <div style="display: flex; flex-direction: column; gap: 3px; align-items: flex-start;">
+                                        <span class="badge" style="background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; font-weight: 800;">
+                                            <i class="fa-solid fa-triangle-exclamation"></i> REVIEW OVERDUE
+                                        </span>
+                                        <small style="font-size: 11px; color: #dc2626; font-weight: 600;">
+                                            Pending <?php echo $hoursPending; ?>h (>24h SLA)
+                                        </small>
+                                    </div>
                                 <?php elseif ($isPending): ?>
-                                    <span class="badge" style="background: #fef3c7; color: #92400e;">
-                                        <i class="fa-solid fa-clock"></i> Pending Review
-                                    </span>
+                                    <div style="display: flex; flex-direction: column; gap: 3px; align-items: flex-start;">
+                                        <span class="badge" style="background: #fef3c7; color: #92400e;">
+                                            <i class="fa-solid fa-clock"></i> Pending Review
+                                        </span>
+                                        <small style="font-size: 11px; color: #92400e;">
+                                            Submitted <?php echo ($hoursPending > 0) ? $hoursPending . 'h ago' : 'just now'; ?>
+                                        </small>
+                                    </div>
                                 <?php elseif ($isApproved): ?>
                                     <span class="badge" style="background: #d1fae5; color: #065f46;">
                                         <i class="fa-solid fa-check-circle"></i> Approved
@@ -409,7 +462,7 @@ include __DIR__ . '/includes/header.php';
                                             <?php echo csrf_field(); ?>
                                             <input type="hidden" name="action" value="approve">
                                             <input type="hidden" name="id" value="<?php echo (int)$p['id']; ?>">
-                                            <button type="submit" class="btn btn-primary btn-sm" title="Approve profile and make active">
+                                            <button type="submit" class="btn btn-primary btn-sm" style="<?php echo $isOverdue ? 'background: #059669; font-weight: 700;' : ''; ?>" title="Approve profile and make active">
                                                 <i class="fa-solid fa-check"></i> Approve
                                             </button>
                                         </form>
@@ -514,6 +567,11 @@ include __DIR__ . '/includes/header.php';
                     <div class="detail-label">Registration Date</div>
                     <div id="modalCreatedAt" class="detail-value"></div>
                 </div>
+
+                <div class="detail-item" style="grid-column: span 2;">
+                    <div class="detail-label">Review Status &amp; Escalation SLA</div>
+                    <div id="modalReviewEscalation" class="detail-value"></div>
+                </div>
             </div>
 
             <!-- Description / Biography -->
@@ -567,16 +625,28 @@ function openProviderModal(data) {
     document.getElementById('modalTagline').textContent = data.tagline || 'No tagline provided';
     document.getElementById('modalCategoryBadge').textContent = data.category_name || 'General';
 
-    // Status Badge
+    // Status Badge & Review Escalation SLA
     const statusContainer = document.getElementById('modalStatusBadge');
+    const escalationEl = document.getElementById('modalReviewEscalation');
+    const hours = parseInt(data.hours_pending, 10) || 0;
+
     if (data.user_status === 'suspended') {
-        statusContainer.innerHTML = '<span class="badge" style="background: #f1f5f9; color: #475569;">Suspended</span>';
+        statusContainer.innerHTML = '<span class="badge" style="background: #f1f5f9; color: #475569;"><i class="fa-solid fa-user-slash"></i> Suspended</span>';
+        escalationEl.innerHTML = '<span style="color: #64748b;">User account is currently suspended.</span>';
     } else if (data.approval_status === 'pending') {
-        statusContainer.innerHTML = '<span class="badge" style="background: #fef3c7; color: #92400e;">Pending Review</span>';
+        if (data.is_overdue) {
+            statusContainer.innerHTML = '<span class="badge" style="background: #fee2e2; color: #991b1b; font-weight: 800; border: 1px solid #fca5a5;"><i class="fa-solid fa-triangle-exclamation"></i> REVIEW OVERDUE</span>';
+            escalationEl.innerHTML = '<span style="color: #dc2626; font-weight: 700;"><i class="fa-solid fa-triangle-exclamation"></i> 24h Review SLA Exceeded (Pending for ' + hours + ' hours — overdue by ' + (hours - 24) + 'h)</span>';
+        } else {
+            statusContainer.innerHTML = '<span class="badge" style="background: #fef3c7; color: #92400e;"><i class="fa-solid fa-clock"></i> Pending Review</span>';
+            escalationEl.innerHTML = '<span style="color: #059669; font-weight: 600;"><i class="fa-solid fa-clock"></i> Within standard 24h review window (Submitted ' + (hours > 0 ? hours + 'h ago' : 'just now') + ')</span>';
+        }
     } else if (data.approval_status === 'approved') {
-        statusContainer.innerHTML = '<span class="badge" style="background: #d1fae5; color: #065f46;">Approved</span>';
+        statusContainer.innerHTML = '<span class="badge" style="background: #d1fae5; color: #065f46;"><i class="fa-solid fa-check-circle"></i> Approved</span>';
+        escalationEl.innerHTML = '<span style="color: #059669; font-weight: 600;"><i class="fa-solid fa-check-circle"></i> Approved &amp; Live on Marketplace</span>';
     } else {
-        statusContainer.innerHTML = '<span class="badge" style="background: #fee2e2; color: #991b1b;">Rejected</span>';
+        statusContainer.innerHTML = '<span class="badge" style="background: #fee2e2; color: #991b1b;"><i class="fa-solid fa-circle-xmark"></i> Rejected</span>';
+        escalationEl.innerHTML = '<span style="color: #991b1b; font-weight: 600;"><i class="fa-solid fa-circle-xmark"></i> Application Rejected</span>';
     }
 
     // Public storefront link
