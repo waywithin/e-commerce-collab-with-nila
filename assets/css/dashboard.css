@@ -208,6 +208,223 @@
     background: #fafaf9;
 }
 
+/* ==========================================================================
+   Quick Actions Navigation Grid
+   ========================================================================== */
+.quick-actions-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 18px;
+    margin-bottom: 30px;
+}
+
+.action-card {
+    background: #ffffff;
+    border: 1px solid var(--border-color, #E8E2DA);
+    border-radius: var(--radius-lg, 8px);
+    padding: 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    text-decoration: none;
+    color: inherit;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    transition: all 180ms ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.action-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+    border-color: #8C3A27;
+}
+
+.action-card-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: var(--radius-md, 6px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    flex-shrink: 0;
+}
+
+.action-card-icon.primary {
+    background: #F1E0DB;
+    color: #8C3A27;
+}
+
+.action-card-icon.info {
+    background: #e0f2fe;
+    color: #0284c7;
+}
+
+.action-card-icon.success {
+    background: #d1fae5;
+    color: #059669;
+}
+
+.action-card-icon.warning {
+    background: #fef3c7;
+    color: #d97706;
+}
+
+.action-card-icon.purple {
+    background: #f3e8ff;
+    color: #7e22ce;
+}
+
+.action-card-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-heading, #2C2825);
+    margin-bottom: 3px;
+}
+
+.action-card-desc {
+    font-size: 12.5px;
+    color: #64748b;
+    line-height: 1.4;
+}
+
+.action-card-badge {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 12px;
+    line-height: 1;
+}
+
+/* ==========================================================================
+   Activity Audit Trail / Timeline
+   ========================================================================== */
+.activity-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.activity-item {
+    display: flex;
+    gap: 16px;
+    padding: 16px 24px;
+    border-bottom: 1px solid #f1f5f9;
+    align-items: flex-start;
+    transition: background 120ms ease;
+}
+
+.activity-item:last-child {
+    border-bottom: none;
+}
+
+.activity-item:hover {
+    background: #fafaf9;
+}
+
+.activity-icon-wrap {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.activity-icon-wrap.primary {
+    background: #F1E0DB;
+    color: #8C3A27;
+}
+
+.activity-icon-wrap.info {
+    background: #e0f2fe;
+    color: #0284c7;
+}
+
+.activity-icon-wrap.success {
+    background: #d1fae5;
+    color: #059669;
+}
+
+.activity-icon-wrap.warning {
+    background: #fef3c7;
+    color: #d97706;
+}
+
+.activity-icon-wrap.neutral {
+    background: #f1f5f9;
+    color: #64748b;
+}
+
+.activity-body {
+    flex: 1;
+    min-width: 0;
+}
+
+.activity-title {
+    font-size: 13.5px;
+    color: #1e293b;
+    font-weight: 600;
+    margin-bottom: 3px;
+    word-break: break-word;
+}
+
+.activity-meta {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: #64748b;
+}
+
+/* ==========================================================================
+   Empty States
+   ========================================================================== */
+.empty-state-box {
+    padding: 48px 24px;
+    text-align: center;
+    color: #64748b;
+}
+
+.empty-state-icon {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background: #f1f5f9;
+    color: #94a3b8;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    margin: 0 auto 16px;
+}
+
+.empty-state-icon.success {
+    background: #ecfdf5;
+    color: #10b981;
+}
+
+.empty-state-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: #334155;
+    margin-bottom: 6px;
+}
+
+.empty-state-desc {
+    font-size: 13.5px;
+    max-width: 440px;
+    margin: 0 auto;
+    line-height: 1.5;
+}
+
 @media (max-width: 900px) {
     .dashboard-wrapper {
         flex-direction: column;
@@ -219,5 +436,9 @@
 
     .dashboard-main {
         padding: 20px;
+    }
+
+    .quick-actions-grid {
+        grid-template-columns: 1fr;
     }
 }
