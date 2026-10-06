@@ -17,20 +17,42 @@ $db = getDB();
 
 $pageTitle = 'Manage Business Owners';
 
+// Explicit default variable initialization
+$action = null;
+$provId = 0;
+$targetProvider = null;
+
 // --------------------------------------------------------------------
 // 1. SECURE POST ACTION HANDLER (Approve, Reject, Suspend, Toggle Feature)
 // --------------------------------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // 1. Validate CSRF Token
     if (!verify_csrf_token($_POST['csrf_token'] ?? '')) {
         set_flash('danger', 'Security validation failed (invalid CSRF token). Please try again.');
         header("Location: " . BASE_URL . "/manager/providers.php");
         exit;
     }
 
+    // 2. Read and sanitize request parameters
     $action = sanitize_string($_POST['action'] ?? '');
-    $provId = (int)($_POST['id'] ?? 0);
+    $provId = filter_input(INPUT_POST, 'id', FILTER_VALIDATE_INT) ?: (int)($_POST['id'] ?? 0);
 
-    // Verify Business Owner existence
+    // 3. Whitelist allowed state-changing actions
+    $allowedActions = ['approve', 'reject', 'suspend', 'toggle_featured'];
+    if (!in_array($action, $allowedActions, true)) {
+        set_flash('danger', 'Invalid or unsupported action requested.');
+        header("Location: " . BASE_URL . "/manager/providers.php");
+        exit;
+    }
+
+    // 4. Validate Business Owner ID
+    if ($provId <= 0) {
+        set_flash('danger', 'Invalid Business Owner identifier provided.');
+        header("Location: " . BASE_URL . "/manager/providers.php");
+        exit;
+    }
+
+    // 5. Verify Business Owner existence in Database
     $checkStmt = $db->prepare("
         SELECT sp.id, sp.business_name, sp.user_id, sp.approval_status, sp.is_featured, u.status AS user_status
         FROM service_providers sp
@@ -42,7 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $targetProvider = $checkStmt->fetch();
 
     if (!$targetProvider) {
-        set_flash('danger', 'Business Owner record not found or invalid identifier.');
+        set_flash('danger', 'Business Owner record not found in database.');
         header("Location: " . BASE_URL . "/manager/providers.php");
         exit;
     }
@@ -50,6 +72,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $bizName = $targetProvider['business_name'];
     $userId = (int)$targetProvider['user_id'];
 
+    // 6. Execute state change safely
     if ($action === 'approve') {
         $db->prepare("UPDATE service_providers SET approval_status = 'approved', updated_at = NOW() WHERE id = :id")->execute(['id' => $provId]);
         $db->prepare("UPDATE users SET status = 'active', updated_at = NOW() WHERE id = :uid")->execute(['uid' => $userId]);
@@ -73,18 +96,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $statusLabel = $newFeatured ? 'featured' : 'unfeatured';
         log_activity(current_user_id(), 'FEATURE_PROVIDER', 'service_provider', $provId, 'Toggled featured status (' . $statusLabel . ') for: ' . $bizName);
         set_flash('success', 'Business Owner "' . e($bizName) . '" is now ' . $statusLabel . '.');
-    } else {
-        set_flash('danger', 'Invalid action requested.');
     }
 
     // Preserve search/filter query params on redirect
     $redirectUrl = BASE_URL . "/manager/providers.php";
     $queryParts = [];
     if (!empty($_GET['search'])) {
-        $queryParts['search'] = $_GET['search'];
+        $queryParts['search'] = sanitize_string($_GET['search']);
     }
     if (!empty($_GET['status']) && $_GET['status'] !== 'all') {
-        $queryParts['status'] = $_GET['status'];
+        $queryParts['status'] = sanitize_string($_GET['status']);
     }
     if (!empty($_GET['category']) && (int)$_GET['category'] > 0) {
         $queryParts['category'] = (int)$_GET['category'];
@@ -98,11 +119,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // --------------------------------------------------------------------
-// 2. SEARCH & FILTER PARAMETERS
+// 2. SEARCH & FILTER PARAMETERS (GET Sanitization & Whitelisting)
 // --------------------------------------------------------------------
-$search = sanitize_string($_GET['search'] ?? '');
-$statusFilter = sanitize_string($_GET['status'] ?? 'all');
-$categoryFilter = (int)($_GET['category'] ?? 0);
+$search = mb_substr(sanitize_string($_GET['search'] ?? ''), 0, 100);
+$rawStatus = sanitize_string($_GET['status'] ?? 'all');
+$allowedStatuses = ['all', 'pending', 'overdue', 'approved', 'rejected', 'suspended', 'featured'];
+$statusFilter = in_array($rawStatus, $allowedStatuses, true) ? $rawStatus : 'all';
+$categoryFilter = max(0, (int)($_GET['category'] ?? 0));
 
 // Fetch categories for dropdown filter
 $categoriesList = $db->query("SELECT id, name FROM categories WHERE status = 'active' ORDER BY name ASC")->fetchAll();
