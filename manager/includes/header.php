@@ -103,6 +103,11 @@ $currentScript = basename($_SERVER['PHP_SELF']);
                 </a>
             </li>
             <li>
+                <a href="<?php echo BASE_URL; ?>/manager/analytics.php" class="sidebar-link <?php echo ($currentScript === 'analytics.php') ? 'active' : ''; ?>">
+                    <i class="fa-solid fa-chart-line"></i> Platform Analytics
+                </a>
+            </li>
+            <li>
                 <a href="<?php echo BASE_URL; ?>/manager/settings.php" class="sidebar-link <?php echo ($currentScript === 'settings.php') ? 'active' : ''; ?>">
                     <i class="fa-solid fa-sliders"></i> Platform Settings
                 </a>
