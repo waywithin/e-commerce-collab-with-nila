@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 /**
  * Magal Creator Multi-Vendor Marketplace
  * Homepage (Public Front)
@@ -192,35 +192,6 @@ include __DIR__ . '/includes/header.php';
         </div>
     </div>
 </section>
-
-    <div class="card h-100 border-0 shadow-sm rounded-3 overflow-hidden" style="background-color: var(--color-card-bg);">
-        <img src="<?php echo htmlspecialchars($product['image_url'] ?? 'assets/images/placeholder-product.svg'); ?>" class="card-img-top" alt="<?php echo htmlspecialchars($product['name']); ?>" style="height: 200px; object-fit: cover;">
-        <div class="card-body d-flex flex-column">
-            <h5 class="card-title fw-bold" style="color: var(--color-text);"><?php echo htmlspecialchars($product['name']); ?></h5>
-            
-            <!-- Woman Entrepreneur Storytelling Section -->
-            <?php if (!empty($product['provider_name']) || !empty($product['business_name'])): ?>
-            <div class="d-flex align-items-center gap-2 my-2 pt-2 border-top">
-                <img src="<?php echo htmlspecialchars($product['provider_image'] ?? 'assets/images/placeholder-provider.svg'); ?>" class="rounded-circle" width="32" height="32" style="object-fit: cover;">
-                <span class="small text-muted">
-                by <strong style="color: var(--color-primary);"><?php echo htmlspecialchars($product['business_name'] ?? $product['provider_name']); ?></strong>
-                </span>
-            </div>
-            <?php endif; ?>
-
-            <p class="card-text text-muted small flex-grow-1"><?php echo htmlspecialchars(substr($product['description'], 0, 90)) . '...'; ?></p>
-            
-            <div class="d-flex justify -content-between align-items-center mt-3 pt-2 border-top">
-            <span class="fw-bold fs-5" style="color: var(--color-primary);">₹<?php echo number_format($product['price'], 2); ?></span>
-            <a href="product-details.php?id=<?php echo $product['id']; ?>" class="btn btn-sm px-3 fw-medium text-white" style="background-color: var(--color-primary);">View Details</a>
-        </div>
-            
-            <!-- Subtle Impact Badge -->
-            <div class="mt-2 text-center">
-            <small style="color: var(--color-support); font-size: 0.75rem;">✨ Your order powers independent craft</small>
-            </div>
-        </div>
-    </div>
 
 <!-- 3. LIMITED-TIME OFFERS & LIVE COUNTDOWNS -->
 <?php if (!empty($activeOffers)): ?>
