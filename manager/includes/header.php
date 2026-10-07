@@ -108,6 +108,11 @@ $currentScript = basename($_SERVER['PHP_SELF']);
                 </a>
             </li>
             <li>
+                <a href="<?php echo BASE_URL; ?>/manager/reports.php" class="sidebar-link <?php echo ($currentScript === 'reports.php') ? 'active' : ''; ?>">
+                    <i class="fa-solid fa-file-invoice"></i> Reports &amp; Exports
+                </a>
+            </li>
+            <li>
                 <a href="<?php echo BASE_URL; ?>/manager/settings.php" class="sidebar-link <?php echo ($currentScript === 'settings.php') ? 'active' : ''; ?>">
                     <i class="fa-solid fa-sliders"></i> Platform Settings
                 </a>
